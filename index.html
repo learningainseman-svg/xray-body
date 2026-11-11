@@ -75,7 +75,7 @@
   <div id="panel" hidden>
     <h2>Camera</h2>
     <div class="row">
-      <button class="btn" id="flipBtn">Switch camera</button>
+      <button class="btn" id="flipBtn">Use rear camera</button>
       <button class="btn" id="freezeBtn">Freeze</button>
     </div>
     <label class="chk"><input type="checkbox" id="mirror" checked> Mirror image</label>
@@ -301,9 +301,9 @@ async function loadModels() {
         catch (e) { if (delegate==='CPU') throw e; }
       }
     };
-    poseTask = await mk(M.PoseLandmarker, POSE_URL, {numPoses:1});
+    poseTask = await mk(M.PoseLandmarker, POSE_URL, {numPoses:1, minPoseDetectionConfidence:.35, minPosePresenceConfidence:.35, minTrackingConfidence:.35});
     setStatus('');
-    mk(M.HandLandmarker, HAND_URL, {numHands:2}).then(t => handTask = t).catch(e => console.warn('Hand tracking unavailable:', e));
+    mk(M.HandLandmarker, HAND_URL, {numHands:2, minHandDetectionConfidence:.35, minHandPresenceConfidence:.35, minTrackingConfidence:.35}).then(t => handTask = t).catch(e => console.warn('Hand tracking unavailable:', e));
   } catch (e) {
     console.error(e); setStatus('Could not load the tracking model. Check the internet connection and reload.');
   }
@@ -314,13 +314,25 @@ async function startCamera() {
     setStatus('Camera is not available. Open this page over https:// or on localhost.'); return;
   }
   try {
-    if (stream) stream.getTracks().forEach(t => t.stop());
+    let busy = 0;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); video.srcObject = null; }
     setStatus('Waiting for camera permission…');
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1280},height:{ideal:720}},audio:false});
+    stream = null;
+    const size = {width:{ideal:1280}, height:{ideal:720}};
+    const tries = [{facingMode:{exact:facing}, ...size}, {facingMode:facing, ...size}, {facingMode:facing}, true];
+    let err = null;
+    for (let i=0; i<tries.length && !stream; i++) {
+      try { stream = await navigator.mediaDevices.getUserMedia({video:tries[i], audio:false}); }
+      catch (e) { err = e; if (e.name === 'NotAllowedError') break; if (e.name === 'NotReadableError') { await new Promise(r => setTimeout(r, 500)); i--; if (++busy > 4) break; } }
+    }
+    if (!stream) throw err;
+    const got = (stream.getVideoTracks()[0].getSettings() || {}).facingMode;
+    if (got) facing = got === 'environment' ? 'environment' : 'user';       // what the device actually gave us
+    $('flipBtn').textContent = facing === 'user' ? 'Use rear camera' : 'Use front camera';
     video.srcObject = stream; await video.play();
     opt.mirror = facing === 'user'; $('mirror').checked = opt.mirror;
     frozen = false; $('freezeBtn').textContent = 'Freeze';
-    mode = 'camera'; resetTrack(); showUI(); applyLook(); setStatus('');
+    mode = 'camera'; resetTrack(); lastVT = -1; missing = 0; rawHands = []; hintOn = false; hintSince = 0; showUI(); applyLook(); setStatus('');
     await loadModels();
   } catch (e) {
     console.error(e);
@@ -414,6 +426,7 @@ function render(mats) {
 }
 
 /* ---------- organs and blood vessels: each vertex follows one or two bone groups ---------- */
+const NOMAT = {L:[0,0,0,0,0,0,0,0,0], t:[0,0,0]};
 const PARENT = {head:'neck', neck:'thorax', lumbar:'thorax', pelvis:'lumbar', hum:'thorax', fore:'hum', palm:'fore', fem:'pelvis', shin:'fem', foot:'shin'};
 function ensureSoft() {
   if (softState) return;
@@ -483,7 +496,7 @@ function softMats(mats) {
   const find = name => {
     if (mats[name]) return mats[name];
     const [base, side] = name.split('_'), par = PARENT[base];
-    return par ? find(side && PARENT[par] !== undefined && !['thorax','lumbar','pelvis','neck'].includes(par) ? par+'_'+side : par) : mats.thorax;
+    return par ? find(side && PARENT[par] !== undefined && !['thorax','lumbar','pelvis','neck'].includes(par) ? par+'_'+side : par) : (mats.thorax || NOMAT);
   };
   return SOFT.main.map(name => ({M: find(name), vis: !!mats[name]}));
 }
@@ -508,6 +521,33 @@ function renderSoft(mats) {
     gl.drawElements(gl.TRIANGLES, ic, gl.UNSIGNED_SHORT, i0*2);
   }
   return sm_;
+}
+
+/* palm + every finger bone from the 21 hand landmarks Hq (pixel space); k = pixels per model metre */
+function handRig(mats, S, Hq, k) {
+  const J = SKEL.joints, rK = mid(J['mc2_'+S],J['mc5_'+S]), rP = sub(rK,J['wrist_'+S]), rPl = sub(J['mc2_'+S],J['mc5_'+S]);
+  const thumbSide = sub(Hq[5],Hq[17]), K = mid(Hq[5],Hq[17]);
+  const palm = mats['palm_'+S] = make(frame(rP,rPl), rK, frame(sub(K,Hq[0]),thumbSide), K, k);
+  const fin = (seg, i0, i1) => {
+    const r0 = J[seg+'_a'], r1 = J[seg+'_b']; if (!r0) return;
+    mats[seg] = make(frame(sub(r1,r0), rPl), r0, frame(sub(Hq[i1],Hq[i0]), thumbSide), Hq[i0], k);
+  };
+  fin('mc1_'+S, 1, 2); fin(`f_${S}_thumb_prox`, 2, 3); fin(`f_${S}_thumb_dist`, 3, 4);
+  for (const f in FINGERS) { const m = FINGERS[f]; fin(`f_${S}_${f}_prox`, m, m+1); fin(`f_${S}_${f}_midd`, m+1, m+2); fin(`f_${S}_${f}_dist`, m+2, m+3); }
+  return palm;
+}
+/* a hand with no tracked body behind it (close-up of a hand): rig it on its own */
+const HPAIRS = [[0,5],[0,17],[5,17],[0,9],[5,8],[9,12]];
+function handOnly(mats, h) {
+  let a = 0, b = 0;
+  for (const [i,j] of HPAIRS) { a += Math.hypot(h.px[i].x-h.px[j].x, h.px[i].y-h.px[j].y); b += Math.hypot(h.w[i].x-h.w[j].x, h.w[i].y-h.w[j].y); }
+  if (b < .01) return false;
+  const pm = a/b, Hq = h.px.map((p,i) => [p.x, p.y, (h.w[i].z-h.w[0].z)*pm]);
+  let S = h.side;
+  if (mats['palm_'+S]) { if (mats.thorax) return false; S = S === 'L' ? 'R' : 'L'; if (mats['palm_'+S]) return false; }
+  const J = SKEL.joints, rP = sub(mid(J['mc2_'+S],J['mc5_'+S]), J['wrist_'+S]);
+  handRig(mats, S, Hq, clamp(len(sub(mid(Hq[5],Hq[17]),Hq[0]))/len(rP), .6*pm, 1.6*pm));
+  return true;
 }
 
 /* ---------- rig: turn tracked joints into one transform per bone group ---------- */
@@ -577,15 +617,8 @@ function solve(P, Wd, hands) {
         const FrP = frame(rP,rPl);
         let palm;
         if (Hq) {
-          const K = mid(Hq[5],Hq[17]), pv = sub(K,Hq[0]);
-          const kP = smooth('palm'+S, len(pv)/len(rP)/ppm, .1, .7, 1.5)*ppm;
-          palm = make(FrP, rK, frame(pv,thumbSide), K, kP);
-          const fin = (seg, i0, i1) => {
-            const r0 = J[seg+'_a'], r1 = J[seg+'_b']; if (!r0) return;
-            mats[seg] = make(frame(sub(r1,r0), rPl), r0, frame(sub(Hq[i1],Hq[i0]), thumbSide), Hq[i0], kP);
-          };
-          fin('mc1_'+S, 1, 2); fin(`f_${S}_thumb_prox`, 2, 3); fin(`f_${S}_thumb_dist`, 3, 4);
-          for (const f in FINGERS) { const m = FINGERS[f]; fin(`f_${S}_${f}_prox`, m, m+1); fin(`f_${S}_${f}_midd`, m+1, m+2); fin(`f_${S}_${f}_dist`, m+2, m+3); }
+          hand.used = true;
+          palm = handRig(mats, S, Hq, smooth('palm'+S, len(sub(mid(Hq[5],Hq[17]),Hq[0]))/len(rP)/ppm, .1, .7, 1.5)*ppm);
         } else {
           const pv = sub(mid(Q[Lf?19:20],Q[Lf?17:18]), Q[iW]);
           palm = make(FrP, J['wrist_'+S], frame(pv,thumbSide), apply(foreM,J['wrist_'+S]), kF);
@@ -626,10 +659,13 @@ function resize() {
   W = w; H = h; dpr = d;
   for (const c of [bc,lc]) { c.width = W*dpr; c.height = H*dpr; }
 }
-let hintOn = false;
-function setHint(on) {
-  if (on === hintOn) return; hintOn = on;
-  if (mode === 'camera') setStatus(on ? 'Step back so both shoulders are in view.' : '');
+let hintOn = false, hintSince = 0;
+function setHint(on) {                                        // only nag after a second with nothing found
+  if (!on) { hintSince = 0; if (hintOn) { hintOn = false; setStatus(''); } return; }
+  if (!hintSince) hintSince = performance.now();
+  if (!hintOn && performance.now()-hintSince > 1200) {
+    hintOn = true; setStatus('Looking for a person or a hand… Keep the head and both shoulders in view, or hold a hand up to the camera.');
+  }
 }
 function frame_(t) {
   requestAnimationFrame(frame_);
@@ -645,11 +681,17 @@ function frame_(t) {
         rawHands = [];
         if (handTask && opt.fingers) {
           const hr = handTask.detectForVideo(video, performance.now());
-          (hr.landmarks||[]).forEach((lm,i) => { if (hr.worldLandmarks && hr.worldLandmarks[i]) rawHands.push({lm, w:hr.worldLandmarks[i]}); });
+          const hd = hr.handedness || hr.handednesses || [];
+          (hr.landmarks||[]).forEach((lm,i) => {
+            if (!hr.worldLandmarks || !hr.worldLandmarks[i]) return;
+            // the tracker names hands as if the picture were a mirror image; our frames are not mirrored, so swap
+            const label = hd[i] && hd[i][0] && hd[i][0].categoryName;
+            rawHands.push({lm, w:hr.worldLandmarks[i], side: label === 'Left' ? 'R' : 'L'});
+          });
         }
       } catch (e) { console.error(e); }
-      if (raw === null) { if (++missing > 12) { resetTrack(); setStatus('No body found — step back so the camera can see the person.'); } }
-      else if (raw) { if (missing > 12) setStatus(''); missing = 0; }
+      if (raw === null) { if (++missing > 12) resetTrack(); }
+      else if (raw) missing = 0;
     }
   } else if (mode === 'demo') { const d = demoPose(params.has('t') ? +params.get('t') : t); raw = d.lm; rawW = d.world; rawHands = []; }
   if (raw && rawW) {
@@ -665,9 +707,17 @@ function frame_(t) {
   lg.setTransform(dpr,0,0,dpr,0,0); lg.clearRect(0,0,W,H);
   labels = []; hitBoxes = [];
   let mats = null;
-  if (glReady && mode !== 'idle' && sm) {
-    mats = solve(sm.map(px), smW, rawHands.map(h => ({px:h.lm.map(px), w:h.w})));
-    setHint(!mats);
+  if (glReady && mode !== 'idle') {
+    const hs = rawHands.map(h => ({px:h.lm.map(px), w:h.w, side:h.side}));
+    if (sm) mats = solve(sm.map(px), smW, hs);
+    for (const h of hs) if (!h.used) {                       // hands that no tracked arm claimed
+      const m = mats || {};
+      if (handOnly(m, h) && !mats) {
+        mats = m; midX = h.px[9].x; if (opt.mirror) midX = W-midX;
+        midW = 2*Math.hypot(h.px[5].x-h.px[17].x, h.px[5].y-h.px[17].y);
+      }
+    }
+    if (mode === 'camera' && poseTask) setHint(!mats);
   }
   if (glReady) render(mats);
   if (mats) {
