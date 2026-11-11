@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>X-Ray Body Mirror</title>
+<style>
+  :root { --bg:#020a12; --ink:#dff1ff; --dim:#8fb2c9; --line:#17384d; --accent:#5ad1ff; --hot:#ffd166; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; background:radial-gradient(ellipse at 50% 40%,#06202f 0%,#020a12 70%); }
+  #video,#bones,#labels { position:absolute; inset:0; width:100%; height:100%; }
+  #video { object-fit:contain; }
+  #bones { pointer-events:none; }
+  #bones.glow { filter:drop-shadow(0 0 4px rgba(110,200,255,.55)); }
+  #labels { touch-action:manipulation; cursor:pointer; }
+  button,select,input { font:inherit; }
+  .btn { background:#0b2a3c; color:var(--ink); border:1px solid #1f5573; border-radius:10px;
+    padding:10px 16px; cursor:pointer; }
+  .btn:hover { background:#0f3850; }
+  .btn.primary { background:var(--accent); color:#00202e; border-color:var(--accent); font-weight:600; }
+  #start { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:rgba(2,10,18,.82); }
+  #start .box { max-width:460px; text-align:center; }
+  #start h1 { margin:0 0 8px; font-size:28px; letter-spacing:.02em; }
+  #start p { color:var(--dim); margin:0 0 18px; }
+  #start .row { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:18px; }
+  #start small { color:#6f93aa; display:block; }
+  #status { position:absolute; left:50%; top:14px; transform:translateX(-50%); background:rgba(4,14,24,.8);
+    border:1px solid var(--line); padding:6px 14px; border-radius:20px; font-size:13px; color:var(--dim);
+    max-width:80%; text-align:center; pointer-events:none; }
+  #status:empty { display:none; }
+  #menuBtn { position:absolute; right:12px; top:12px; z-index:5; padding:8px 12px; }
+  #panel { position:absolute; right:12px; top:58px; z-index:5; width:270px; max-width:calc(100% - 24px);
+    max-height:calc(100% - 70px); overflow:auto; background:rgba(4,14,24,.92); border:1px solid var(--line);
+    border-radius:14px; padding:14px; }
+  #panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); margin:14px 0 6px; }
+  #panel h2:first-child { margin-top:0; }
+  #panel label { display:block; margin:8px 0; font-size:14px; }
+  #panel label.chk { display:flex; gap:8px; align-items:center; }
+  #panel input[type=range] { width:100%; accent-color:var(--accent); }
+  #panel select { width:100%; background:#0b2a3c; color:var(--ink); border:1px solid #1f5573; border-radius:8px; padding:7px; }
+  #panel .row { display:flex; gap:8px; }
+  #panel .row .btn { flex:1; padding:8px 6px; font-size:13px; }
+  #panel .note { font-size:12px; color:#6f93aa; margin-top:12px; }
+  #card { position:absolute; left:12px; bottom:68px; z-index:4; width:340px; max-width:calc(100% - 24px);
+    background:rgba(4,14,24,.94); border:1px solid var(--hot); border-radius:14px; padding:12px 14px; }
+  #card h3 { margin:0 26px 2px 0; font-size:17px; color:var(--hot); }
+  #card .sub { font-size:12px; color:var(--dim); margin-bottom:6px; }
+  #card p { margin:0; font-size:14px; }
+  #card button { position:absolute; right:8px; top:6px; background:none; border:0; color:var(--dim); font-size:20px; cursor:pointer; }
+  #layers { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); z-index:4; display:flex; gap:4px;
+    background:rgba(4,14,24,.88); border:1px solid var(--line); border-radius:14px; padding:4px; max-width:calc(100% - 16px); }
+  #layers button { background:none; border:0; color:var(--dim); padding:9px 14px; border-radius:10px; cursor:pointer;
+    font-size:14px; white-space:nowrap; display:flex; align-items:center; gap:7px; }
+  #layers button i { width:9px; height:9px; border-radius:50%; background:currentColor; opacity:.45; }
+  #layers button.on { background:#0f3850; color:var(--ink); }
+  #layers button.on i { opacity:1; }
+  #layers button[data-l=bones].on i { background:#bfe4ff; }
+  #layers button[data-l=organs].on i { background:#ff9d8a; }
+  #layers button[data-l=blood].on i { background:#ff4a44; }
+  @media (max-width:480px) { #layers button { padding:9px 10px; font-size:13px; } }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="bones"></canvas>
+  <canvas id="labels"></canvas>
+  <div id="status"></div>
+
+  <button id="menuBtn" class="btn" hidden>&#9776; Controls</button>
+  <div id="panel" hidden>
+    <h2>Camera</h2>
+    <div class="row">
+      <button class="btn" id="flipBtn">Switch camera</button>
+      <button class="btn" id="freezeBtn">Freeze</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="mirror" checked> Mirror image</label>
+    <label>Real image showing through <input type="range" id="real" min="0" max="100" value="35"></label>
+
+    <h2>Skeleton</h2>
+    <select id="look">
+      <option value="0" selected>X-ray look</option>
+      <option value="1">Solid bone look</option>
+    </select>
+    <label>Bone brightness <input type="range" id="alpha" min="20" max="200" value="100"></label>
+    <label class="chk"><input type="checkbox" id="fingers" checked> Detailed finger bones</label>
+
+    <h2>Part names</h2>
+    <select id="detail">
+      <option value="0">Hidden</option>
+      <option value="1">Main bones</option>
+      <option value="2" selected>All details</option>
+    </select>
+    <label>Text size <input type="range" id="fsize" min="80" max="150" value="100"></label>
+    <div class="note">Tap a name to read about it. Use the tabs at the bottom to switch layers: skeleton, organs, blood circulation.<br>
+      A real 3D anatomy dataset of one adult male, scaled and posed by body tracking. It shows typical anatomy, not a scan of the person, and is not a diagnostic tool.
+      Video is processed on this device and never uploaded.<br><br>
+      Anatomy models: BodyParts3D, &copy; The Database Center for Life Science, licensed under CC Attribution-Share Alike 2.1 Japan. Simplified and re-posed.</div>
+  </div>
+
+  <div id="layers" hidden role="group" aria-label="Layers">
+    <button data-l="bones" class="on"><i></i>Skeleton</button>
+    <button data-l="organs"><i></i>Organs</button>
+    <button data-l="blood"><i></i>Circulation</button>
+  </div>
+
+  <div id="card" hidden>
+    <button id="cardClose" aria-label="Close">&times;</button>
+    <h3 id="cardName"></h3><div class="sub" id="cardSub"></div><p id="cardText"></p>
+  </div>
+
+  <div id="start">
+    <div class="box">
+      <h1>X-Ray Body Mirror</h1>
+      <p>Point the camera at a person and see a real 3D skeleton follow their movements, with every bone named. Works through clothing, because it tracks body pose rather than skin.</p>
+      <div class="row">
+        <button class="btn primary" id="startBtn">Start camera</button>
+        <button class="btn" id="demoBtn">Demo without camera</button>
+      </div>
+      <small>Stand back so the whole body is in view. Typical anatomy from the BodyParts3D dataset (&copy; DBCLS, CC BY-SA 2.1 JP) &mdash; not a scan of you and not a medical device. Video never leaves this device.</small>
+    </div>
+  </div>
+</div>
+
+<script src="skeleton-data.js"></script>
+<script>
+'use strict';
+/* ---------- bone reference text ---------- */
+const INFO = {
+  cranium:['Skull (cranium)','8 cranial bones','The bony case that protects the brain. Its plates are joined by immovable joints called sutures.'],
+  frontal:['Frontal bone','Cranium','Forms the forehead and the roof of the eye sockets. Contains the frontal sinuses.'],
+  parietal:['Parietal bone','Cranium, paired','Left and right parietal bones form most of the roof and sides of the skull, meeting at the sagittal suture.'],
+  temporal:['Temporal bone','Cranium, paired','Houses the middle and inner ear. The mastoid process behind the ear and the jaw joint (TMJ) are part of it.'],
+  orbit:['Orbit','Eye socket','A cone-shaped cavity made from seven bones that holds and protects the eyeball.'],
+  nasal:['Nasal bones','Face, paired','Two small bones forming the bridge of the nose. The opening below them is the piriform aperture.'],
+  zygomatic:['Zygomatic bone','Cheekbone, paired','Forms the prominence of the cheek and part of the outer wall and floor of the orbit.'],
+  maxilla:['Maxilla','Upper jaw, paired','Holds the upper teeth, forms most of the hard palate and the floor of the orbit. Contains the maxillary sinus.'],
+  mandible:['Mandible','Lower jaw','The only freely movable bone of the skull. Holds the lower teeth and hinges at the temporomandibular joints.'],
+  cervical:['Cervical vertebrae','C1 – C7','Seven neck vertebrae. C1 (atlas) carries the skull and C2 (axis) lets the head rotate.'],
+  thoracic:['Thoracic vertebrae','T1 – T12','Twelve vertebrae of the upper and mid back. Each one articulates with a pair of ribs.'],
+  lumbar:['Lumbar vertebrae','L1 – L5','Five large vertebrae of the lower back that carry most of the body weight.'],
+  sacrum:['Sacrum','S1 – S5, fused','Five fused vertebrae forming the back of the pelvis. Joins the hip bones at the sacroiliac joints.'],
+  coccyx:['Coccyx','Tailbone','Three to five small fused vertebrae at the very base of the spine.'],
+  clavicle:['Clavicle','Collarbone','An S-shaped strut linking the sternum to the scapula. It is the most commonly fractured bone.'],
+  scapula:['Scapula','Shoulder blade','A flat triangular bone on the back of the rib cage. Its glenoid cavity forms the shoulder socket.'],
+  manubrium:['Manubrium','Upper sternum','The top section of the breastbone. Articulates with the clavicles and the first two pairs of ribs.'],
+  sternum:['Sternum (body)','Breastbone','The flat bone in the centre of the chest that anchors the ribs through costal cartilage.'],
+  xiphoid:['Xiphoid process','Lower sternum','The small pointed tip of the sternum. Cartilage in youth, it ossifies in adulthood.'],
+  ribs:['Ribs','12 pairs','Curved bones forming the rib cage, which protects the heart and lungs and moves with breathing.'],
+  trueribs:['True ribs','Ribs 1 – 7','Attach directly to the sternum, each through its own costal cartilage.'],
+  falseribs:['False ribs','Ribs 8 – 10','Attach to the sternum indirectly, by joining the cartilage of the rib above.'],
+  floatribs:['Floating ribs','Ribs 11 – 12','Short ribs with no front attachment. They end in the muscle of the abdominal wall.'],
+  humerus:['Humerus','Upper arm','Runs from the shoulder to the elbow. Its rounded head sits in the glenoid cavity of the scapula.'],
+  radius:['Radius','Forearm, thumb side','Rotates around the ulna to turn the palm up and down. Wider at the wrist end.'],
+  ulna:['Ulna','Forearm, little-finger side','Forms the main hinge of the elbow. Its tip, the olecranon, is the point of the elbow.'],
+  carpals:['Carpals','8 wrist bones','Scaphoid, lunate, triquetrum, pisiform, trapezium, trapezoid, capitate and hamate, arranged in two rows.'],
+  metacarpals:['Metacarpals','5 palm bones','Connect the wrist to the fingers. Their heads form the knuckles.'],
+  phalanges:['Phalanges (hand)','14 finger bones','Three in each finger (proximal, middle, distal) and two in the thumb.'],
+  ilium:['Ilium','Hip bone, upper part','The broad wing of the pelvis. Its upper edge, the iliac crest, is what you feel at your waist.'],
+  ischium:['Ischium','Hip bone, lower back part','The part of the pelvis you sit on. Its ischial tuberosity is the "sit bone".'],
+  pubis:['Pubis','Hip bone, front part','The two pubic bones meet in the midline at the pubic symphysis.'],
+  femur:['Femur','Thigh bone','The longest and strongest bone in the body. Its head fits the acetabulum to form the hip joint.'],
+  patella:['Patella','Kneecap','The largest sesamoid bone, sitting inside the quadriceps tendon in front of the knee joint.'],
+  tibia:['Tibia','Shin bone','The main weight-bearing bone of the lower leg. Its lower end forms the inner ankle (medial malleolus).'],
+  fibula:['Fibula','Calf bone','The slender bone on the outer side of the lower leg. Its lower end forms the outer ankle (lateral malleolus).'],
+  talus:['Talus','Ankle bone','Sits between the tibia and the calcaneus and passes body weight to the foot. No muscles attach to it.'],
+  calcaneus:['Calcaneus','Heel bone','The largest tarsal bone. The Achilles tendon attaches to its back surface.'],
+  tarsals:['Tarsals','7 ankle bones','Talus, calcaneus, navicular, cuboid and three cuneiforms form the back half of the foot.'],
+  metatarsals:['Metatarsals','5 foot bones','Long bones of the forefoot that form the arch and connect to the toes.'],
+  toes:['Phalanges (foot)','14 toe bones','Two in the big toe and three in each of the other toes.']
+};
+Object.assign(INFO, {
+  occipital:['Occipital bone','Cranium','Forms the back and base of the skull. The spinal cord passes through its large opening, the foramen magnum.'],
+  sphenoid:['Sphenoid bone','Cranium','A butterfly-shaped bone in the middle of the skull base. It touches every other cranial bone and holds the pituitary gland.'],
+  teeth:['Teeth','32 in adults','Incisors, canines, premolars and molars set in the maxilla and mandible. Enamel is the hardest tissue in the body.'],
+  hyoid:['Hyoid bone','Neck','A U-shaped bone under the jaw that anchors the tongue. It is the only bone that does not touch another bone.'],
+  cartilage:['Costal cartilage','Rib cage','Bars of hyaline cartilage joining the ribs to the sternum. They give the chest wall its spring for breathing.'],
+  hipbone:['Hip bone','Ilium, ischium and pubis','Three bones fused into one. The ilium is the broad wing, the ischium is the part you sit on and the pubis is at the front. Its socket, the acetabulum, holds the femur.']
+});
+
+Object.assign(INFO, {
+  brain:['Brain (cerebrum)','Central nervous system','The largest part of the brain. Its folded cortex handles thought, movement, sensation, language and memory.'],
+  cerebellum:['Cerebellum','Hindbrain','Sits under the back of the cerebrum. It fine-tunes movement, balance and posture.'],
+  brainstem:['Brainstem','Midbrain, pons, medulla','Connects the brain to the spinal cord and controls breathing, heart rate and consciousness.'],
+  eye:['Eyeball','Organ of sight','A fluid-filled globe about 24 mm across. Light is focused by the cornea and lens onto the retina.'],
+  trachea:['Trachea','Windpipe','A tube held open by C-shaped cartilage rings. It carries air from the larynx and divides into the two main bronchi.'],
+  lungs:['Lungs (bronchial tree)','Airways','The branching airways inside each lung, ending in about 300 million air sacs where gas exchange happens. This dataset shows the airway tree, not the lung surface.'],
+  heart:['Heart','Four-chambered pump','Beats about 100,000 times a day. The right side sends blood to the lungs and the left side sends it to the rest of the body.'],
+  esophagus:['Esophagus','Gullet','A muscular tube about 25 cm long that moves food from the throat to the stomach by waves of contraction.'],
+  stomach:['Stomach','Digestive system','A muscular bag that churns food with acid and enzymes before passing it to the small intestine.'],
+  liver:['Liver','Largest internal organ','Filters blood from the gut, makes bile, stores glycogen and handles hundreds of metabolic tasks. It sits under the right ribs.'],
+  gallbladder:['Gallbladder','Under the liver','Stores and concentrates bile, releasing it into the duodenum to help digest fat.'],
+  pancreas:['Pancreas','Behind the stomach','Makes digestive enzymes and the hormones insulin and glucagon, which control blood sugar.'],
+  spleen:['Spleen','Upper left abdomen','Filters blood, recycles old red blood cells and is part of the immune system.'],
+  kidney:['Kidney','Paired, at the back of the abdomen','Filters about 180 litres of blood plasma a day, removing waste as urine and balancing water and salts.'],
+  adrenal:['Adrenal gland','On top of each kidney','Makes adrenaline, cortisol and aldosterone, which regulate stress response, metabolism and blood pressure.'],
+  ureter:['Ureter','Urinary system','A narrow muscular tube carrying urine from each kidney down to the bladder.'],
+  smallint:['Small intestine','Duodenum, jejunum, ileum','About 6 metres long. Most digestion and nutrient absorption happens here.'],
+  largeint:['Large intestine','Colon and rectum','Absorbs water and salts and forms stool. It frames the small intestine on three sides.'],
+  bladder:['Urinary bladder','Pelvis','A stretchy muscular sac that stores urine, holding around 400 to 600 ml.'],
+  aorta:['Aorta','Largest artery','Leaves the left ventricle, arches over the heart and runs down in front of the spine, supplying the whole body.'],
+  venacava:['Vena cava','Largest veins','The superior and inferior venae cavae return oxygen-poor blood from the body to the right atrium.'],
+  pulmArt:['Pulmonary arteries','Heart to lungs','Carry oxygen-poor blood from the right ventricle to the lungs. They are the only arteries that carry oxygen-poor blood, so they are shown blue.'],
+  pulmVein:['Pulmonary veins','Lungs to heart','Carry freshly oxygenated blood from the lungs back to the left atrium, so they are shown red.'],
+  coronary:['Coronary arteries','On the heart surface','Supply the heart muscle itself. A blockage here causes a heart attack.'],
+  portal:['Hepatic portal vein','Gut to liver','Carries nutrient-rich blood from the intestines, stomach and spleen to the liver for processing.'],
+  carotid:['Carotid artery','Neck','The main supply of blood to the head and brain. Its pulse can be felt beside the windpipe.'],
+  jugular:['Internal jugular vein','Neck','Drains blood from the brain, face and neck back toward the heart.'],
+  subclavian:['Subclavian artery','Under the collarbone','Supplies the arm, and gives branches to the neck, brain and chest wall.'],
+  brachial:['Brachial artery','Upper arm','The main artery of the arm. Blood pressure is measured over it at the elbow.'],
+  radial:['Radial artery','Forearm, thumb side','The artery used to feel the pulse at the wrist.'],
+  ulnar:['Ulnar artery','Forearm, little-finger side','Joins the radial artery in the palm to form the arches that supply the hand.'],
+  armveins:['Cephalic and basilic veins','Superficial arm veins','Run under the skin of the arm. Blood samples are usually taken where they connect at the elbow.'],
+  renal:['Renal artery','To the kidney','Carries about a fifth of the blood pumped by the heart to the kidneys for filtering.'],
+  iliac:['Iliac artery','Pelvis','The aorta divides into the two common iliac arteries, which supply the pelvis and legs.'],
+  femoralA:['Femoral artery','Thigh','The main artery of the leg. Its pulse can be felt in the groin.'],
+  femoralV:['Femoral vein','Thigh','Runs beside the femoral artery and returns blood from the leg.'],
+  saphenous:['Great saphenous vein','Longest vein','Runs under the skin from the foot to the groin. It is often used as a graft in heart bypass surgery.'],
+  popliteal:['Popliteal artery','Behind the knee','The continuation of the femoral artery. It divides into the tibial arteries below the knee.'],
+  tibial:['Tibial arteries','Lower leg','The anterior and posterior tibial arteries supply the leg and foot.']
+});
+
+/* ---------- state ---------- */
+const $ = id => document.getElementById(id);
+const video = $('video'), bc = $('bones'), lc = $('labels');
+const lg = lc.getContext('2d');
+const opt = { mirror:true, real:35, gain:1, look:0, fingers:true, detail:2, fsize:1, layers:{bones:true, organs:false, blood:false} };
+let mode = 'idle', facing = 'user', stream = null, frozen = false;
+let poseTask = null, handTask = null, loading = false;
+let sm = null, smW = null, rawHands = [], missing = 0, lastVT = -1, ppm = 0, ratios = {};
+let midX = 0, midW = 100, W = 0, H = 0, dpr = 1, selected = null, labels = [], hitBoxes = [];
+const params = new URLSearchParams(location.search);
+const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+
+/* ---------- 3D maths (arrays [x,y,z]; x = image right, y = down, z = away from camera) ---------- */
+const sub = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]], add = (a,b) => [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const mul = (a,s) => [a[0]*s,a[1]*s,a[2]*s], dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0],a[1],a[2]), norm = a => { const l = len(a)||1; return [a[0]/l,a[1]/l,a[2]/l]; };
+const mid = (a,b) => [(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
+const sstep = (a,b,x) => { const t = clamp((x-a)/(b-a),0,1); return t*t*(3-2*t); };
+/* orthonormal frame: e1 along p, e2 = s made perpendicular to p, e3 = e1 x e2 */
+function frame(p, s) {
+  const e1 = norm(p); let e2 = sub(s, mul(e1, dot(s,e1)));
+  if (len(e2) < 1e-6) { e2 = Math.abs(e1[0]) < .9 ? [1,0,0] : [0,1,0]; e2 = sub(e2, mul(e1, dot(e2,e1))); }
+  e2 = norm(e2); return [e1, e2, cross(e1,e2)];
+}
+const mulL = (L,p) => [L[0]*p[0]+L[1]*p[1]+L[2]*p[2], L[3]*p[0]+L[4]*p[1]+L[5]*p[2], L[6]*p[0]+L[7]*p[1]+L[8]*p[2]];
+function anchorTo(L, A0, anchor) { const q = mulL(L,A0); return {L, t:[anchor[0]-q[0], anchor[1]-q[1], anchor[2]-q[2]]}; }
+/* maps the rest frame Fr (around rest point A0) onto target frame Ft at `anchor`, scaling along each frame axis */
+function make(Fr, A0, Ft, anchor, s) {
+  if (typeof s === 'number') s = [s,s,s];
+  const L = new Array(9);
+  for (let i=0;i<3;i++) for (let j=0;j<3;j++) { let v = 0; for (let k=0;k<3;k++) v += Ft[k][i]*s[k]*Fr[k][j]; L[i*3+j] = v; }
+  return anchorTo(L, A0, anchor);
+}
+const apply = (M,p) => { const q = mulL(M.L,p); return [q[0]+M.t[0], q[1]+M.t[1], q[2]+M.t[2]]; };
+function smooth(key, v, a, lo, hi) {
+  v = clamp(v, lo, hi); if (!isFinite(v)) v = 1;
+  ratios[key] = key in ratios ? ratios[key] + (v-ratios[key])*a : v; return ratios[key];
+}
+
+/* ---------- demo pose: 2D landmarks plus matching flat "world" coordinates ---------- */
+const DEMO = [[.5,.152],[.515,.125],[.525,.125],[.535,.125],[.485,.125],[.475,.125],[.465,.125],[.556,.135],[.444,.135],
+  [.52,.166],[.48,.166],[.62,.27],[.38,.27],0,0,0,0,0,0,0,0,0,0,[.57,.55],[.43,.55],[.58,.74],[.42,.74],[.585,.905],[.415,.905],
+  [.578,.935],[.422,.935],[.615,.965],[.385,.965]];
+const DEMO_Z = {0:-.125,1:-.09,2:-.09,3:-.09,4:-.09,5:-.09,6:-.09,9:-.1,10:-.1,29:.04,30:.04,31:-.15,32:-.15,21:-.03,22:-.03};
+function demoPose(t) {
+  const VW = 720, VH = 960, k = .5/269, pts = DEMO.map(p => p ? [p[0]*VW, p[1]*VH] : null);
+  for (const sx of [1,-1]) {
+    const L = sx === 1, ph = L ? 0 : 1.7;
+    const t1 = .28 + .75*(Math.sin(t/1100+ph)*.5+.5), t2 = 1.5*(Math.sin(t/800+ph*2)*.5+.5);
+    const sh = pts[L?11:12], d1 = [sx*Math.sin(t1), Math.cos(t1)], d2 = [sx*Math.sin(t1+t2), Math.cos(t1+t2)], n = [sx*d2[1], -sx*sx*d2[0]*sx];
+    const el = [sh[0]+151*d1[0], sh[1]+151*d1[1]], wr = [el[0]+137*d2[0], el[1]+137*d2[1]];
+    const at = (f,l) => [wr[0]+f*d2[0]+l*n[0], wr[1]+f*d2[1]+l*n[1]];
+    pts[L?13:14] = el; pts[L?15:16] = wr; pts[L?17:18] = at(40,-13); pts[L?19:20] = at(46,13); pts[L?21:22] = at(22,22);
+  }
+  return {
+    lm: pts.map(p => ({x:p[0]/VW, y:p[1]/VH, visibility:1})),
+    world: pts.map((p,i) => ({x:(p[0]-360)*k, y:(p[1]-528)*k, z:DEMO_Z[i]||0}))
+  };
+}
+
+/* ---------- tracking ---------- */
+const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const POSE_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
+const HAND_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task';
+async function loadModels() {
+  if (poseTask || loading) return;
+  loading = true; setStatus('Loading body-tracking model…');
+  try {
+    const M = await import(MP + '/vision_bundle.mjs');
+    const fs = await M.FilesetResolver.forVisionTasks(MP + '/wasm');
+    const mk = async (Cls, url, extra) => {
+      for (const delegate of ['GPU','CPU']) {
+        try { return await Cls.createFromOptions(fs, {baseOptions:{modelAssetPath:url,delegate}, runningMode:'VIDEO', ...extra}); }
+        catch (e) { if (delegate==='CPU') throw e; }
+      }
+    };
+    poseTask = await mk(M.PoseLandmarker, POSE_URL, {numPoses:1});
+    setStatus('');
+    mk(M.HandLandmarker, HAND_URL, {numHands:2}).then(t => handTask = t).catch(e => console.warn('Hand tracking unavailable:', e));
+  } catch (e) {
+    console.error(e); setStatus('Could not load the tracking model. Check the internet connection and reload.');
+  }
+  loading = false;
+}
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('Camera is not available. Open this page over https:// or on localhost.'); return;
+  }
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    setStatus('Waiting for camera permission…');
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject = stream; await video.play();
+    opt.mirror = facing === 'user'; $('mirror').checked = opt.mirror;
+    frozen = false; $('freezeBtn').textContent = 'Freeze';
+    mode = 'camera'; resetTrack(); showUI(); applyLook(); setStatus('');
+    await loadModels();
+  } catch (e) {
+    console.error(e);
+    setStatus(e.name === 'NotAllowedError' ? 'Camera permission was blocked. Allow it in the browser and try again.'
+      : 'Could not open the camera: ' + e.message);
+  }
+}
+function resetTrack() { sm = null; smW = null; ppm = 0; ratios = {}; }
+function startDemo() { mode = 'demo'; resetTrack(); opt.mirror = false; $('mirror').checked = false; showUI(); applyLook(); setStatus(''); }
+function showUI() { $('start').hidden = true; $('menuBtn').hidden = false; $('panel').hidden = true; $('layers').hidden = false; }
+function setStatus(t) { $('status').textContent = t; }
+function applyLook() {
+  const r = opt.real/100;
+  video.style.filter = `grayscale(${(1-r).toFixed(2)}) brightness(${(0.12+0.88*r).toFixed(2)}) contrast(1.1)`;
+  video.style.transform = bc.style.transform = opt.mirror ? 'scaleX(-1)' : '';
+  video.style.visibility = mode === 'camera' ? 'visible' : 'hidden';
+  bc.classList.toggle('glow', opt.look === 0);
+}
+
+/* ---------- WebGL renderer ---------- */
+const gl = bc.getContext('webgl2', {alpha:true, premultipliedAlpha:true, antialias:true});
+let prog = null, U = {}, glReady = false, boneVAO = null, boneVB = null, softVB = null;
+let softProg = null, SU = {}, softVAO = null, softState = '';      // organs + vessels, loaded on first use
+function initGL() {
+  if (!gl || !window.SKEL) { setStatus(!gl ? 'This browser does not support WebGL2, which the 3D skeleton needs.' : 'skeleton-data.js is missing — keep it next to index.html.'); return; }
+  const vs = `#version 300 es
+    in vec3 aPos; in vec3 aNor; in vec2 aIds;
+    uniform vec3 uQc; uniform float uQs; uniform mat3 uL; uniform vec3 uT; uniform vec3 uView; uniform float uSel;
+    out vec3 vN; out float vHot;
+    void main() {
+      vec3 w = uL*(aPos/32767.0*uQs+uQc)+uT;
+      vN = normalize(uL*aNor);
+      vHot = (uSel > .5 && (abs(aIds.x-uSel) < .5 || abs(aIds.y-uSel) < .5)) ? 1. : 0.;
+      gl_Position = vec4(w.x/uView.x*2.-1., 1.-w.y/uView.y*2., clamp(w.z/uView.z,-1.,1.), 1.);
+    }`;
+  const fs = `#version 300 es
+    precision mediump float;
+    in vec3 vN; in float vHot; uniform int uMode; uniform float uGain; out vec4 o;
+    void main() {
+      vec3 n = normalize(vN);
+      if (uMode == 0) {                       // x-ray: bright where the surface turns away from the viewer
+        float f = 1.-abs(n.z);
+        float a = (.07+.93*pow(f,1.6))*uGain*(1.+vHot*.8);
+        vec3 c = mix(vec3(.60,.83,1.), vec3(1.,.78,.32), vHot);
+        o = vec4(c*a, a*.55);
+      } else {                                // solid bone
+        if (n.z > 0.) n = -n;
+        float d = max(dot(n, normalize(vec3(-.35,-.55,-.76))), 0.);
+        float rim = pow(1.-abs(n.z), 3.);
+        vec3 base = mix(vec3(.93,.89,.80), vec3(1.,.76,.28), vHot);
+        o = vec4(base*(.30+.78*d)*min(uGain,1.6) + rim*.12, 1.);
+      }
+    }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  ['aPos','aNor','aIds'].forEach((n,i) => gl.bindAttribLocation(prog, i, n));
+  gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  for (const n of ['uQc','uQs','uL','uT','uView','uSel','uMode','uGain']) U[n] = gl.getUniformLocation(prog, n);
+  const bin = atob(SKEL.data), bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  SKEL.data = null;
+  boneVAO = gl.createVertexArray(); gl.bindVertexArray(boneVAO);
+  boneVB = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, boneVB); gl.bufferData(gl.ARRAY_BUFFER, bytes.subarray(0, SKEL.vBytes), gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, bytes.subarray(SKEL.vBytes), gl.STATIC_DRAW);
+  for (let i=0;i<3;i++) gl.enableVertexAttribArray(i);
+  glReady = true;
+}
+function render(mats) {
+  gl.viewport(0,0,bc.width,bc.height); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  if (!mats) return;
+  if (softState === 'ready' && (opt.layers.organs || opt.layers.blood)) renderSoft(mats);
+  if (!opt.layers.bones) return;
+  gl.useProgram(prog); gl.bindVertexArray(boneVAO); gl.bindBuffer(gl.ARRAY_BUFFER, boneVB);
+  if (opt.look === 0) { gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); }
+  else { gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND); }
+  gl.uniform3fv(U.uQc, SKEL.qc); gl.uniform1f(U.uQs, SKEL.qs);
+  gl.uniform3f(U.uView, W, H, 4*Math.max(W,H));
+  gl.uniform1i(U.uMode, opt.look); gl.uniform1f(U.uGain, opt.gain);
+  gl.uniform1f(U.uSel, selected ? Math.max(0, SKEL.ids.indexOf(selected)) : 0);
+  for (const name in mats) {
+    const M = mats[name], s = SKEL.segs[name]; if (!M || !s) continue;
+    const L = M.L, o = s[0]*12;
+    gl.uniformMatrix3fv(U.uL, false, [L[0],L[3],L[6],L[1],L[4],L[7],L[2],L[5],L[8]]);
+    gl.uniform3fv(U.uT, M.t);
+    gl.vertexAttribPointer(0, 3, gl.SHORT, false, 12, o);
+    gl.vertexAttribPointer(1, 3, gl.BYTE, true, 12, o+6);
+    gl.vertexAttribPointer(2, 2, gl.UNSIGNED_BYTE, false, 12, o+9);
+    gl.drawElements(gl.TRIANGLES, s[3], gl.UNSIGNED_SHORT, s[2]*2);
+  }
+}
+
+/* ---------- organs and blood vessels: each vertex follows one or two bone groups ---------- */
+const PARENT = {head:'neck', neck:'thorax', lumbar:'thorax', pelvis:'lumbar', hum:'thorax', fore:'hum', palm:'fore', fem:'pelvis', shin:'fem', foot:'shin'};
+function ensureSoft() {
+  if (softState) return;
+  softState = 'loading'; setStatus('Loading organs and blood vessels…');
+  const sc = document.createElement('script'); sc.src = 'organs-data.js';
+  sc.onload = () => { try { initSoft(); softState = 'ready'; setStatus(''); } catch (e) { console.error(e); softState = 'error'; setStatus('Could not start the organ layers: ' + e.message); } };
+  sc.onerror = () => { softState = ''; setStatus('organs-data.js is missing — keep it next to index.html.'); };
+  document.head.appendChild(sc);
+}
+function initSoft() {
+  const n = SOFT.main.length;
+  const vs = `#version 300 es
+    in vec3 aPos; in vec3 aNor; in vec4 aSk;
+    uniform vec3 uQc; uniform float uQs; uniform mat4 uM[${n}]; uniform float uVis[${n}]; uniform vec4 uPal[${SOFT.pal.length}];
+    uniform vec3 uView; uniform float uSel; uniform vec3 uHeart; uniform float uTime;
+    out vec3 vN; out vec3 vCol; out float vHot; out float vShow; out float vPulse; out float vOrgan;
+    void main() {
+      vec3 p = aPos/32767.0*uQs+uQc; vec4 P = vec4(p,1.);
+      int a = int(aSk.y), b = int(aSk.z); float w = aSk.w/255.;
+      vec3 wp = mix((uM[a]*P).xyz, (uM[b]*P).xyz, w);
+      vN = normalize(mix(mat3(uM[a])*aNor, mat3(uM[b])*aNor, w));
+      vShow = min(uVis[a], w > 0. ? uVis[b] : 1.);
+      vec4 pal = uPal[int(aSk.x)]; vCol = pal.rgb; vOrgan = pal.a < .5 ? 1. : 0.;
+      vHot = (uSel > .5 && abs(aSk.x-uSel) < .5) ? 1. : 0.;
+      float d = distance(p, uHeart), k = pal.a;            // pulse wave: out along arteries, back along veins
+      vPulse = k < .5 ? 0. : k < 1.5 ? pow(max(sin(d*14.-uTime*7.),0.),5.) : k < 2.5 ? .3*pow(max(sin(d*14.+uTime*4.),0.),3.) : pow(max(sin(uTime*7.),0.),3.);
+      gl_Position = vec4(wp.x/uView.x*2.-1., 1.-wp.y/uView.y*2., clamp(wp.z/uView.z,-1.,1.), 1.);
+    }`;
+  const fs = `#version 300 es
+    precision mediump float;
+    in vec3 vN; in vec3 vCol; in float vHot; in float vShow; in float vPulse; in float vOrgan;
+    uniform int uMode; uniform float uGain; out vec4 o;
+    void main() {
+      if (vShow < .99) discard;
+      vec3 n = normalize(vN);
+      vec3 c = mix(vCol, vec3(1.,.86,.35), vHot);
+      if (uMode == 0) {
+        float f = 1.-abs(n.z);
+        float a = mix((.16+.84*pow(f,1.4))*(1.+vPulse*1.8), .05+.5*pow(f,1.7), vOrgan)*uGain*(1.+vHot);
+        o = vec4(c*a, a*.55);
+      } else {
+        if (n.z > 0.) n = -n;
+        float d = max(dot(n, normalize(vec3(-.35,-.55,-.76))), 0.);
+        float rim = pow(1.-abs(n.z), 3.);
+        o = vec4(c*(.34+.74*d)*min(uGain,1.6)*(1.+vPulse*.55) + rim*.10, 1.);
+      }
+    }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  softProg = gl.createProgram(); gl.attachShader(softProg, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(softProg, sh(gl.FRAGMENT_SHADER, fs));
+  ['aPos','aNor','aSk'].forEach((nm,i) => gl.bindAttribLocation(softProg, i, nm));
+  gl.linkProgram(softProg); if (!gl.getProgramParameter(softProg, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(softProg));
+  for (const nm of ['uQc','uQs','uM','uVis','uPal','uView','uSel','uHeart','uTime','uMode','uGain']) SU[nm] = gl.getUniformLocation(softProg, nm);
+  const bin = atob(SOFT.data), bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  SOFT.data = null;
+  softVAO = gl.createVertexArray(); gl.bindVertexArray(softVAO);
+  softVB = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, softVB); gl.bufferData(gl.ARRAY_BUFFER, bytes.subarray(0, SOFT.vBytes), gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, bytes.subarray(SOFT.vBytes), gl.STATIC_DRAW);
+  for (let i=0;i<3;i++) gl.enableVertexAttribArray(i);
+  gl.useProgram(softProg);
+  gl.uniform4fv(SU.uPal, SOFT.pal.flat()); gl.uniform3fv(SU.uQc, SOFT.qc); gl.uniform1f(SU.uQs, SOFT.qs); gl.uniform3fv(SU.uHeart, SOFT.heart);
+  gl.bindVertexArray(boneVAO);
+}
+/* transform for each main bone group; a group that is not tracked borrows its parent's and is hidden */
+function softMats(mats) {
+  const find = name => {
+    if (mats[name]) return mats[name];
+    const [base, side] = name.split('_'), par = PARENT[base];
+    return par ? find(side && PARENT[par] !== undefined && !['thorax','lumbar','pelvis','neck'].includes(par) ? par+'_'+side : par) : mats.thorax;
+  };
+  return SOFT.main.map(name => ({M: find(name), vis: !!mats[name]}));
+}
+const groupOn = g => g === 'organs' ? opt.layers.organs : g === 'vessels' ? opt.layers.blood : (opt.layers.organs || opt.layers.blood);
+function renderSoft(mats) {
+  const sm_ = softMats(mats), mm = new Float32Array(sm_.length*16), vis = new Float32Array(sm_.length);
+  sm_.forEach((e,i) => { const L = e.M.L, t = e.M.t; mm.set([L[0],L[3],L[6],0, L[1],L[4],L[7],0, L[2],L[5],L[8],0, t[0],t[1],t[2],1], i*16); vis[i] = e.vis ? 1 : 0; });
+  gl.useProgram(softProg); gl.bindVertexArray(softVAO); gl.bindBuffer(gl.ARRAY_BUFFER, softVB);
+  if (opt.look === 0) { gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); }
+  else { gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND); }
+  gl.uniformMatrix4fv(SU.uM, false, mm); gl.uniform1fv(SU.uVis, vis);
+  gl.uniform3f(SU.uView, W, H, 4*Math.max(W,H));
+  gl.uniform1i(SU.uMode, opt.look); gl.uniform1f(SU.uGain, opt.gain);
+  gl.uniform1f(SU.uSel, selected ? Math.max(0, SOFT.ids.indexOf(selected)) : 0);
+  gl.uniform1f(SU.uTime, performance.now()/1000);
+  for (const [grp, v0, vn, i0, ic] of SOFT.chunks) {
+    if (!groupOn(grp)) continue;
+    const o = v0*16;
+    gl.vertexAttribPointer(0, 3, gl.SHORT, false, 16, o);
+    gl.vertexAttribPointer(1, 3, gl.BYTE, true, 16, o+6);
+    gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, false, 16, o+9);
+    gl.drawElements(gl.TRIANGLES, ic, gl.UNSIGNED_SHORT, i0*2);
+  }
+  return sm_;
+}
+
+/* ---------- rig: turn tracked joints into one transform per bone group ---------- */
+const PAIRS = [[11,12],[23,24],[11,23],[12,24],[11,13],[12,14],[13,15],[14,16],[23,25],[24,26],[25,27],[26,28]];
+const FINGERS = {index:5, middle:9, ring:13, little:17};
+function solve(P, Wd, hands) {
+  const J = SKEL.joints, vis = (i,t=.5) => P[i].v > t;
+  if (!vis(11,.4) || !vis(12,.4)) return null;
+  let a = 0, b = 0;
+  for (const [i,j] of PAIRS) if (P[i].v > .5 && P[j].v > .5) {
+    a += Math.hypot(P[i].x-P[j].x, P[i].y-P[j].y); b += Math.hypot(Wd[i].x-Wd[j].x, Wd[i].y-Wd[j].y);
+  }
+  if (b < .05) return null;
+  ppm = ppm ? ppm + (a/b-ppm)*.35 : a/b;                       // screen pixels per metre
+  const Q = P.map((p,i) => [p.x, p.y, Wd[i].z*ppm]);          // joints in pixel space with tracked depth
+  const mats = {};
+  midX = (Q[11][0]+Q[12][0]+Q[23][0]+Q[24][0])/4; if (opt.mirror) midX = W-midX;
+  midW = Math.hypot(Q[11][0]-Q[12][0], Q[11][1]-Q[12][1]);
+
+  /* trunk */
+  const Sm = mid(Q[11],Q[12]), Hm = mid(Q[23],Q[24]), spine = sub(Hm,Sm), lat = sub(Q[11],Q[12]);
+  const rSm = mid(J.shoulder_L,J.shoulder_R), rHm = mid(J.hip_L,J.hip_R), rSpine = sub(rHm,rSm), rLat = sub(J.shoulder_L,J.shoulder_R);
+  const sB = smooth('body', len(spine)/len(rSpine)/ppm, .25, .6, 1.7)*ppm;
+  const sLat = clamp(len(lat)/len(rLat), .8*sB, 1.3*sB);
+  const Ft = frame(spine, lat), front = Ft[2];
+  mats.thorax = make(frame(rSpine,rLat), rSm, Ft, Sm, [sB, sLat, (sB+sLat)/2]);
+  const hl = sub(Q[23],Q[24]), rHl = sub(J.hip_L,J.hip_R);
+  const sHip = clamp(len(hl)/len(rHl), .85*sB, 1.25*sB);
+  const Fp = frame(hl, sub(Sm,Hm)), back = mul(Fp[2], -1);
+  mats.pelvis = make(frame(rHl, sub(rSm,rHm)), rHm, Fp, Hm, [sHip, sB, (sHip+sB)/2]);
+  const between = (seg, r0, r1, p0, p1, rSec, tSec) => {
+    mats[seg] = make(frame(sub(r1,r0), rSec), r0, frame(sub(p1,p0), tSec), p0, [len(sub(p1,p0))/len(sub(r1,r0)), sB, sB]);
+  };
+  between('lumbar', J.t12l1, J.l5s1, apply(mats.thorax,J.t12l1), apply(mats.pelvis,J.l5s1), [1,0,0], hl);
+
+  /* head and neck */
+  if (vis(0,.2) && vis(7,.2) && vis(8,.2)) {
+    const em = mid(Q[7],Q[8]), ex = sub(Q[7],Q[8]), rEm = mid(J.ear_L,J.ear_R), rEx = sub(J.ear_L,J.ear_R);
+    const sH = clamp(smooth('head', len(ex)/len(rEx)/ppm, .1, .6, 1.7)*ppm, .9*sB, 1.15*sB);
+    mats.head = make(frame(rEx, sub(J.nose,rEm)), rEm, frame(ex, sub(Q[0],em)), em, sH);
+    between('neck', J.c1, J.c7t1, apply(mats.head,J.c1), apply(mats.thorax,J.c7t1), [1,0,0], lat);
+  }
+
+  for (const S of ['L','R']) {
+    const Lf = S === 'L', iS = Lf?11:12, iE = Lf?13:14, iW = Lf?15:16;
+    /* shoulder girdle: scapula rides on the shoulder joint, clavicle spans sternum -> shoulder */
+    const scap = mats['scap_'+S] = anchorTo(mats.thorax.L, J['shoulder_'+S], Q[iS]);
+    between('clav_'+S, J['clavM_'+S], J['clavL_'+S], apply(mats.thorax,J['clavM_'+S]), apply(scap,J['clavL_'+S]), [0,1,0], spine);
+
+    /* arm */
+    if (vis(iE,.45)) {
+      const up = sub(Q[iE],Q[iS]), fore = sub(Q[iW],Q[iE]), hasW = vis(iW,.45);
+      const bend = hasW ? sstep(.15,.5, len(cross(norm(up),norm(fore)))) : 0;
+      const rU = sub(J['elbow_'+S],J['shoulder_'+S]);
+      const kU = smooth('hum'+S, len(up)/len(rU)/ppm, .08, .7, 1.5)*ppm;
+      mats['hum_'+S] = make(frame(rU,[0,0,-1]), J['shoulder_'+S], frame(up, add(mul(norm(fore),bend), mul(front,1-bend))), Q[iS], kU);
+      if (hasW) {
+        let hand = null, best = .4*len(spine);
+        for (const h of hands) { const d = Math.hypot(h.px[0].x-P[iW].x, h.px[0].y-P[iW].y); if (d < best) { best = d; hand = h; } }
+        const Hq = hand && hand.px.map((p,i) => [p.x, p.y, Q[iW][2] + (hand.w[i].z-hand.w[0].z)*ppm]);
+        const thumbSide = Hq ? sub(Hq[5],Hq[17]) : sub(Q[Lf?19:20], Q[Lf?17:18]);
+        const rF = sub(J['wrist_'+S],J['elbow_'+S]), rSide = sub(J['radD_'+S],J['ulnD_'+S]);
+        const kF = smooth('fore'+S, len(fore)/len(rF)/ppm, .08, .7, 1.5)*ppm;
+        const foreM = mats['fore_'+S] = make(frame(rF,rSide), J['elbow_'+S], frame(fore,thumbSide), Q[iE], kF);
+        /* palm */
+        const rK = mid(J['mc2_'+S],J['mc5_'+S]), rP = sub(rK,J['wrist_'+S]), rPl = sub(J['mc2_'+S],J['mc5_'+S]);
+        const FrP = frame(rP,rPl);
+        let palm;
+        if (Hq) {
+          const K = mid(Hq[5],Hq[17]), pv = sub(K,Hq[0]);
+          const kP = smooth('palm'+S, len(pv)/len(rP)/ppm, .1, .7, 1.5)*ppm;
+          palm = make(FrP, rK, frame(pv,thumbSide), K, kP);
+          const fin = (seg, i0, i1) => {
+            const r0 = J[seg+'_a'], r1 = J[seg+'_b']; if (!r0) return;
+            mats[seg] = make(frame(sub(r1,r0), rPl), r0, frame(sub(Hq[i1],Hq[i0]), thumbSide), Hq[i0], kP);
+          };
+          fin('mc1_'+S, 1, 2); fin(`f_${S}_thumb_prox`, 2, 3); fin(`f_${S}_thumb_dist`, 3, 4);
+          for (const f in FINGERS) { const m = FINGERS[f]; fin(`f_${S}_${f}_prox`, m, m+1); fin(`f_${S}_${f}_midd`, m+1, m+2); fin(`f_${S}_${f}_dist`, m+2, m+3); }
+        } else {
+          const pv = sub(mid(Q[Lf?19:20],Q[Lf?17:18]), Q[iW]);
+          palm = make(FrP, J['wrist_'+S], frame(pv,thumbSide), apply(foreM,J['wrist_'+S]), kF);
+          for (const seg in SKEL.segs) if (seg.startsWith(`f_${S}_`) || seg === 'mc1_'+S) mats[seg] = palm;
+        }
+        mats['palm_'+S] = palm;
+      }
+    }
+
+    /* leg */
+    const iH = Lf?23:24, iK = Lf?25:26, iA = Lf?27:28, iHe = Lf?29:30, iT = Lf?31:32;
+    if (vis(iK,.45)) {
+      const th = sub(Q[iK],Q[iH]), shin = sub(Q[iA],Q[iK]), hasA = vis(iA,.45);
+      const bend = hasA ? sstep(.15,.5, len(cross(norm(th),norm(shin)))) : 0;
+      const rT = sub(J['knee_'+S],J['hip_'+S]);
+      const kT = smooth('fem'+S, len(th)/len(rT)/ppm, .08, .7, 1.5)*ppm;
+      mats['fem_'+S] = make(frame(rT,[0,0,1]), J['hip_'+S], frame(th, add(mul(norm(shin),bend), mul(back,1-bend))), Q[iH], kT);
+      if (hasA) {
+        const footOK = vis(iHe,.4) && vis(iT,.4), rFoot = sub(J['toe_'+S],J['heel_'+S]);
+        const fd = footOK ? sub(Q[iT],Q[iHe]) : mul(back,-1);
+        const rS = sub(J['ankle_'+S],J['knee_'+S]);
+        const kS = smooth('shin'+S, len(shin)/len(rS)/ppm, .08, .7, 1.5)*ppm;
+        const shinM = mats['shin_'+S] = make(frame(rS,rFoot), J['knee_'+S], frame(shin,fd), Q[iK], kS);
+        if (footOK) {
+          const kFt = smooth('foot'+S, len(fd)/len(rFoot)/ppm, .08, .7, 1.4)*ppm;
+          mats['foot_'+S] = make(frame(rFoot, sub(J['ankle_'+S],J['heel_'+S])), J['ankle_'+S], frame(fd, sub(Q[iA],Q[iHe])), Q[iA], kFt);
+        } else mats['foot_'+S] = shinM;
+      }
+    }
+  }
+  return mats;
+}
+
+/* ---------- main loop ---------- */
+function resize() {
+  const w = innerWidth, h = innerHeight, d = Math.min(devicePixelRatio||1, 2);
+  if (w===W && h===H && d===dpr) return;
+  W = w; H = h; dpr = d;
+  for (const c of [bc,lc]) { c.width = W*dpr; c.height = H*dpr; }
+}
+let hintOn = false;
+function setHint(on) {
+  if (on === hintOn) return; hintOn = on;
+  if (mode === 'camera') setStatus(on ? 'Step back so both shoulders are in view.' : '');
+}
+function frame_(t) {
+  requestAnimationFrame(frame_);
+  resize();
+  let raw, rawW, vw = 720, vh = 960;
+  if (mode === 'camera') {
+    vw = video.videoWidth||1280; vh = video.videoHeight||720;
+    if (poseTask && !frozen && video.readyState >= 2 && video.currentTime !== lastVT) {
+      lastVT = video.currentTime;
+      try {
+        const r = poseTask.detectForVideo(video, performance.now());
+        raw = r.landmarks && r.landmarks[0] || null; rawW = r.worldLandmarks && r.worldLandmarks[0];
+        rawHands = [];
+        if (handTask && opt.fingers) {
+          const hr = handTask.detectForVideo(video, performance.now());
+          (hr.landmarks||[]).forEach((lm,i) => { if (hr.worldLandmarks && hr.worldLandmarks[i]) rawHands.push({lm, w:hr.worldLandmarks[i]}); });
+        }
+      } catch (e) { console.error(e); }
+      if (raw === null) { if (++missing > 12) { resetTrack(); setStatus('No body found — step back so the camera can see the person.'); } }
+      else if (raw) { if (missing > 12) setStatus(''); missing = 0; }
+    }
+  } else if (mode === 'demo') { const d = demoPose(params.has('t') ? +params.get('t') : t); raw = d.lm; rawW = d.world; rawHands = []; }
+  if (raw && rawW) {
+    if (!sm) { sm = raw.map(p => ({x:p.x,y:p.y,v:p.visibility??1})); smW = rawW.map(p => ({x:p.x,y:p.y,z:p.z})); }
+    else raw.forEach((p,i) => {
+      const s = sm[i], w = smW[i], q = rawW[i];
+      s.x += (p.x-s.x)*.55; s.y += (p.y-s.y)*.55; s.v = p.visibility??1;
+      w.x += (q.x-w.x)*.4; w.y += (q.y-w.y)*.4; w.z += (q.z-w.z)*.3;
+    });
+  }
+  const sc = Math.min(W/vw, H/vh), ox = (W-vw*sc)/2, oy = (H-vh*sc)/2;
+  const px = p => ({x: ox + p.x*vw*sc, y: oy + p.y*vh*sc, v: p.v??1});
+  lg.setTransform(dpr,0,0,dpr,0,0); lg.clearRect(0,0,W,H);
+  labels = []; hitBoxes = [];
+  let mats = null;
+  if (glReady && mode !== 'idle' && sm) {
+    mats = solve(sm.map(px), smW, rawHands.map(h => ({px:h.lm.map(px), w:h.w})));
+    setHint(!mats);
+  }
+  if (glReady) render(mats);
+  if (mats) {
+    if (opt.layers.bones) for (const l of SKEL.labels) {
+      const M = mats[l.seg]; if (!M || l.lvl > opt.detail) continue;
+      const p = apply(M, l.p); labels.push({id:l.id, x: opt.mirror ? W-p[0] : p[0], y:p[1]});
+    }
+    if (softState === 'ready' && (opt.layers.organs || opt.layers.blood)) {
+      const sm_ = softMats(mats);
+      for (const l of SOFT.labels) {
+        const e = sm_[l.seg]; if (!e.vis || l.lvl > opt.detail || !groupOn(l.grp)) continue;
+        const p = apply(e.M, l.p); labels.push({id:l.id, x: opt.mirror ? W-p[0] : p[0], y:p[1]});
+      }
+    }
+    drawLabels();
+  }
+}
+
+/* ---------- labels ---------- */
+function drawLabels() {
+  if (!labels.length) return;
+  const fs = clamp(H/58, 10.5, 14)*opt.fsize, rowH = fs*1.42;
+  lg.font = `500 ${fs}px system-ui,-apple-system,"Segoe UI",sans-serif`; lg.textBaseline = 'middle';
+  let minX = 1e9, maxX = -1e9;
+  for (const l of labels) { minX = Math.min(minX,l.x); maxX = Math.max(maxX,l.x); l.text = INFO[l.id][0]; l.tw = lg.measureText(l.text).width; }
+  const cx = midX, bw = Math.max(40, midW);
+  const sides = [[],[]], central = [];
+  for (const l of labels) (Math.abs(l.x-cx) < .12*bw ? central : sides[l.x < cx ? 0 : 1]).push(l);
+  central.sort((a,b) => a.y-b.y);                       // midline bones alternate sides to keep both columns balanced
+  let k = sides[0].length <= sides[1].length ? 0 : 1;
+  for (const l of central) { sides[k].push(l); k = 1-k; }
+  sides.forEach((list, si) => {
+    if (!list.length) return;
+    const maxTw = Math.max(...list.map(l => l.tw)) + 12;
+    const edge = si===0 ? Math.max(maxTw+6, minX-26) : Math.min(W-maxTw-6, maxX+26);
+    list.sort((a,b) => a.y-b.y);
+    const cl = [];                                      // spread overlapping names evenly around where they want to be
+    for (const l of list) {
+      cl.push({n:1, sum:l.y});
+      while (cl.length > 1) {
+        const q = cl[cl.length-1], p = cl[cl.length-2];
+        if (p.sum/p.n + (p.n-1)/2*rowH + rowH <= q.sum/q.n - (q.n-1)/2*rowH) break;
+        p.n += q.n; p.sum += q.sum; cl.pop();
+      }
+    }
+    let i = 0, y = -1e9;
+    for (const c of cl) for (let j=0;j<c.n;j++) list[i++].ly = c.sum/c.n + (j-(c.n-1)/2)*rowH;
+    for (const l of list) { l.ly = Math.max(l.ly, y+rowH, rowH); y = l.ly; }
+    const floor = si===0 && !$('card').hidden ? $('card').offsetTop-rowH : H-rowH;   // keep clear of the info card
+    if (y > floor) for (let i=list.length-1;i>=0;i--) list[i].ly = Math.min(list[i].ly, i===list.length-1 ? floor : list[i+1].ly-rowH);
+    for (const l of list) {
+      const hot = l.id === selected, x0 = si===0 ? edge-l.tw-12 : edge;
+      lg.strokeStyle = hot ? 'rgba(255,209,102,.95)' : 'rgba(120,200,255,.55)'; lg.lineWidth = hot ? 1.6 : 1;
+      lg.beginPath(); lg.moveTo(edge, l.ly); lg.lineTo(l.x,l.y); lg.stroke();
+      lg.beginPath(); lg.arc(l.x,l.y,hot?3.2:2.2,0,6.2832); lg.fillStyle = hot ? '#ffd166' : '#8fdcff'; lg.fill();
+      lg.fillStyle = hot ? 'rgba(60,40,0,.9)' : 'rgba(3,12,22,.78)';
+      lg.beginPath(); if (lg.roundRect) lg.roundRect(x0, l.ly-rowH/2+1, l.tw+12, rowH-2, 5); else lg.rect(x0, l.ly-rowH/2+1, l.tw+12, rowH-2);
+      lg.fill(); if (hot) lg.stroke();
+      lg.fillStyle = hot ? '#ffd166' : '#dff1ff'; lg.fillText(l.text, x0+6, l.ly+.5);
+      hitBoxes.push({id:l.id, x:x0, y:l.ly-rowH/2, w:l.tw+12, h:rowH, ax:l.x, ay:l.y});
+    }
+  });
+}
+function pick(x, y) {
+  for (const b of hitBoxes) if (x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h) return b.id;
+  let best = null, bd = 30;
+  for (const b of hitBoxes) { const d = Math.hypot(x-b.ax,y-b.ay); if (d < bd) { bd = d; best = b.id; } }
+  return best;
+}
+function select(id) {
+  if (id && !INFO[id]) id = null;
+  selected = id;
+  $('card').hidden = !id;
+  if (id) { const [n,s,t] = INFO[id]; $('cardName').textContent = n; $('cardSub').textContent = s; $('cardText').textContent = t; }
+}
+
+/* ---------- wiring ---------- */
+lc.addEventListener('pointerdown', e => { if (mode !== 'idle') select(pick(e.clientX, e.clientY)); });
+$('cardClose').onclick = () => select(null);
+$('startBtn').onclick = startCamera;
+$('demoBtn').onclick = startDemo;
+$('menuBtn').onclick = () => { $('panel').hidden = !$('panel').hidden; };
+$('flipBtn').onclick = () => { facing = facing==='user' ? 'environment' : 'user'; startCamera(); };
+$('freezeBtn').onclick = () => {
+  if (mode !== 'camera') return;
+  frozen = !frozen; $('freezeBtn').textContent = frozen ? 'Resume' : 'Freeze';
+  frozen ? video.pause() : video.play();
+};
+$('mirror').onchange = e => { opt.mirror = e.target.checked; applyLook(); };
+$('real').oninput = e => { opt.real = +e.target.value; applyLook(); };
+$('alpha').oninput = e => { opt.gain = e.target.value/100; };
+$('look').onchange = e => { opt.look = +e.target.value; applyLook(); };
+$('fsize').oninput = e => { opt.fsize = e.target.value/100; };
+$('fingers').onchange = e => { opt.fingers = e.target.checked; };
+$('detail').onchange = e => { opt.detail = +e.target.value; };
+function setLayer(name, on) {
+  opt.layers[name] = on;
+  document.querySelector(`#layers button[data-l=${name}]`).classList.toggle('on', on);
+  if (on && name !== 'bones') ensureSoft();
+}
+for (const b of document.querySelectorAll('#layers button')) b.onclick = () => setLayer(b.dataset.l, !opt.layers[b.dataset.l]);
+if (innerWidth < 760) { opt.detail = 1; $('detail').value = '1'; }
+if (params.has('labels')) { opt.detail = +params.get('labels'); $('detail').value = String(opt.detail); }
+if (params.has('look')) { opt.look = +params.get('look'); $('look').value = String(opt.look); }
+try { initGL(); } catch (e) { console.error(e); setStatus('3D renderer failed to start: ' + e.message); }
+applyLook();
+if (params.has('layers')) for (const k in opt.layers) setLayer(k, params.get('layers').split(',').includes(k));
+if (params.has('demo')) startDemo();
+if (params.has('autostart')) startCamera();
+if (params.has('select')) select(params.get('select'));
+requestAnimationFrame(frame_);
+</script>
+</body>
+</html>
